@@ -574,7 +574,7 @@ void Handler::ProcessMessage() {
         // Command to re-exec the process
         ReExec();
         return;
-    } else if (data <= 0 || data > 9) {
+    } else if (data <= 0 || data > 10) {
         m_log.Emsg("ProcessMessage", "Unknown control message from parent:",
                    std::to_string(data).c_str());
         return;
@@ -611,6 +611,38 @@ void Handler::ProcessMessage() {
     } else if (data == 9) {
         // Pass a fed token file
         AtomicOverwriteFile(fd, m_fedtoken_file);
+    } else if (data == 10) {
+        // Pass a Globus token file to a caller-specified destination path.
+        // The parent sends a 4-byte big-endian path length followed by the path bytes.
+        union {
+            char buf[4];
+            uint32_t len;
+        } lenBuffer;
+        if (recv(m_info_fd, lenBuffer.buf, 4, MSG_WAITALL) != 4) {
+            m_log.Emsg("ProcessMessage",
+                       "Failed to receive Globus token destination path length:",
+                       strerror(errno));
+            close(fd);
+            return;
+        }
+        uint32_t pathLen = ntohl(lenBuffer.len);
+        if (pathLen == 0 || pathLen > 4096) {
+            m_log.Emsg("ProcessMessage",
+                       "Globus token destination path length is invalid:",
+                       std::to_string(pathLen).c_str());
+            close(fd);
+            return;
+        }
+        std::string destPath(pathLen, '\0');
+        if (recv(m_info_fd, &destPath[0], pathLen, MSG_WAITALL) !=
+            static_cast<ssize_t>(pathLen)) {
+            m_log.Emsg("ProcessMessage",
+                       "Failed to receive Globus token destination path:",
+                       strerror(errno));
+            close(fd);
+            return;
+        }
+        AtomicOverwriteFile(fd, destPath);
     } else {
         m_log.Emsg("ProcessMessage", "Unknown message from parent:",
                    std::to_string(data).c_str());
